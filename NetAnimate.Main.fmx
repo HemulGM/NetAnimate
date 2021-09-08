@@ -10,9 +10,29 @@ object FormMain: TFormMain
   OnCreate = FormCreate
   OnDestroy = FormDestroy
   OnKeyUp = FormKeyUp
-  OnMouseMove = FormMouseMove
   OnResize = FormResize
-  OnPaint = FormPaint
   OnShow = FormShow
   DesignerMasterStyle = 0
+  object PaintBox1: TPaintBox
+    Align = Contents
+    Size.Width = 640.000000000000000000
+    Size.Height = 480.000000000000000000
+    Size.PlatformDefault = False
+    OnMouseMove = FormMouseMove
+    OnPaint = PaintBox1Paint
+    object LabelFPS: TLabel
+      AutoSize = True
+      StyledSettings = [Family, Style]
+      Position.X = 8.000000000000000000
+      Position.Y = 8.000000000000000000
+      Size.Width = 32.000000000000000000
+      Size.Height = 27.000000000000000000
+      Size.PlatformDefault = False
+      TextSettings.Font.Size = 20.000000000000000000
+      TextSettings.FontColor = claWhite
+      TextSettings.WordWrap = False
+      Text = 'FPS'
+      TabOrder = 0
+    end
+  end
 end

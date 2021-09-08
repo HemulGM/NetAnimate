@@ -6,7 +6,8 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   System.Generics.Collections, FMX.StdCtrls, FMX.Controls.Presentation,
-  FMX.ScrollBox, FMX.Memo;
+  FMX.ScrollBox, FMX.Memo, System.Math.Vectors, FMX.Types3D, FMX.Controls3D,
+  FMX.Objects3D, FMX.Viewport3D, FMX.Effects, FMX.Filter.Effects, FMX.Objects;
 
 type
   TPointItem = record
@@ -19,18 +20,23 @@ type
   TPointItems = TList<TPointItem>;
 
   TFormMain = class(TForm)
-    procedure FormPaint(Sender: TObject; Canvas: TCanvas; const ARect: TRectF);
+    PaintBox1: TPaintBox;
+    LabelFPS: TLabel;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Single);
     procedure FormKeyUp(Sender: TObject; var Key: Word; var KeyChar: Char; Shift: TShiftState);
     procedure FormShow(Sender: TObject);
     procedure FormResize(Sender: TObject);
+    procedure PaintBox1Paint(Sender: TObject; Canvas: TCanvas);
   private
     FPoint: TPointItems;
     FScreenBounds: TRectF;
+    FPS: Integer;
+    WorldTicks: Integer;
     procedure Refill;
     function CreateRandomItem: TPointItem;
+    function GetPointsCountByFormSize: Int64;
   public
     { Public declarations }
   end;
@@ -45,14 +51,19 @@ uses
 
 {$R *.fmx}
 
+function TFormMain.GetPointsCountByFormSize: Int64;
+begin
+  //Расчет кол-ва точек при нашем размере окна
+  Result := 2 + (ClientWidth * ClientHeight) div 3500;
+end;
+
 procedure TFormMain.Refill;
 var
   i: Integer;
 begin
   FPoint.Clear;
-  //(ClientWidth * ClientHeight) div 3500 - это расчет кол-ва точек при нашем разрешении экрана
-  //Нолевой элемент для курсора
-  for i := 0 to (ClientWidth * ClientHeight) div 3500 do
+  //Нолевой элемент для курсора и 2 - минимум точек
+  for i := 0 to GetPointsCountByFormSize do
     FPoint.Add(CreateRandomItem);
 end;
 
@@ -73,9 +84,6 @@ end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
 begin
-  {$IFDEF ANDROID}
-  FullScreen := True;
-  {$ENDIF}
   FPoint := TPointItems.Create;
   Randomize;
   //Основной поток, приводящий объекты в движение
@@ -86,7 +94,7 @@ begin
       Item: TPointItem;
     begin
       while not Application.Terminated do
-      begin
+      try
         for i := 1 to FPoint.Count - 1 do
         begin
           //Pull, это ж запись
@@ -101,27 +109,58 @@ begin
           Item.Point.Offset(Cos(Item.Direct), Sin(Item.Direct));
           //Если точка за границей - телепортируем к противололожной границе
           if Item.Point.X > FScreenBounds.Right then
-            Item.Point.X := 0;
-          if Item.Point.X < 0 then
+            Item.Point.X := 0
+          else if Item.Point.X < 0 then
             Item.Point.X := FScreenBounds.Right;
 
           if Item.Point.Y > FScreenBounds.Bottom then
-            Item.Point.Y := 0;
-          if Item.Point.Y < 0 then
+            Item.Point.Y := 0
+          else if Item.Point.Y < 0 then
             Item.Point.Y := FScreenBounds.Bottom;
           //Push
           FPoint[i] := Item;
         end;
-        //Требуем перерисовки окна
-        TThread.Synchronize(TThread.CurrentThread,
-          procedure
-          begin
-            Invalidate;
-          end);
-        //Отдохнём 30 мсек.
-        Sleep(30);
+        //Отдохнём
+        TThread.Sleep(1);
+        Inc(WorldTicks);
+      except
+        //
       end;
     end).Start;
+  //Поток отрисовки
+  TThread.CreateAnonymousThread(
+    procedure
+    begin
+      while not Application.Terminated do
+      begin
+        //Требуем перерисовки окна
+        TThread.Synchronize(nil, Invalidate);
+        //Отдохнём
+        TThread.Sleep(1);
+        //TThread.Sleep(1000 div 60);
+      end;
+    end).Start;
+  //Таймер FPS
+  TThread.CreateAnonymousThread(
+    procedure
+    begin
+      while not Application.Terminated do
+      begin
+        //Требуем перерисовки окна
+        TThread.Synchronize(nil,
+          procedure
+          begin
+            LabelFPS.Text := FPS.ToString + ' fps ' + WorldTicks.ToString + ' prcs';
+            WorldTicks := 0;
+            FPS := 0;
+          end);
+        //Отдохнём
+        TThread.Sleep(1000);
+      end;
+    end).Start;
+  //{$IFDEF ANDROID}
+  FullScreen := True;
+  //{$ENDIF}
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
@@ -134,10 +173,8 @@ begin
   case Key of
     0:
       Refill;
-    13:
-      FullScreen := True;
-    27:
-      FullScreen := False;
+    vkEscape:
+      FullScreen := not FullScreen;
   end;
 end;
 
@@ -145,15 +182,31 @@ procedure TFormMain.FormMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Sin
 var
   Item: TPointItem;
 begin
-  //Нолувой жлемент для курсора, присвоим ему зпозицию курсора на форме
+  //Нулевой элемент для курсора, присвоим ему позицию курсора на форме
   Item := FPoint[0];
   Item.Point := TPointF.Create(X, Y);
   FPoint[0] := Item;
-  //Нужна перерисовка
   Invalidate;
 end;
 
-procedure TFormMain.FormPaint(Sender: TObject; Canvas: TCanvas; const ARect: TRectF);
+procedure TFormMain.FormResize(Sender: TObject);
+begin
+  //Сохраним размеры окна для использовании в потоке
+  FScreenBounds := ClientRect;
+  //Удаляем те, что вне видимости
+  while FPoint.Count > GetPointsCountByFormSize do
+    FPoint.Delete(RandomRange(1, FPoint.Count - 1));
+  //Добавляем, если не хватает
+  while FPoint.Count < GetPointsCountByFormSize do
+    FPoint.Add(CreateRandomItem);
+end;
+
+procedure TFormMain.FormShow(Sender: TObject);
+begin
+  Refill;
+end;
+
+procedure TFormMain.PaintBox1Paint(Sender: TObject; Canvas: TCanvas);
 const         //Дистанция между точками
   All = 100;  //Любые точки
   Me = 150;   //Курсор
@@ -163,11 +216,12 @@ var
   D: Single;
 begin
   with Canvas do
-  begin
+  try
     BeginScene;
     //Фон
+    Fill.Kind := TBrushKind.Solid;
     Fill.Color := $FF101010;
-    FillRect(ARect, 0, 0, [], 1.0, TCornerType.Round);
+    FillRect(PaintBox1.BoundsRect, 0, 0, [], 1.0, TCornerType.Round);
     //Общие настройки
     Fill.Kind := TBrushKind.Solid;
     Fill.Color := TAlphaColorRec.White;
@@ -175,13 +229,9 @@ begin
     //По всем объектам
     for i := 0 to FPoint.Count - 1 do
     begin
-      //Нулевой - крусор
-      if i = 0 then
-      begin
-        //Если курсор вне окна - игонрим
-        if not ClientRect.Contains(ScreenToClient(Screen.MousePos)) then
-          Continue;
-      end;
+      //Нулевой - крусор и если курсор вне окна - игонрим
+      if (i = 0) and (not ClientRect.Contains(ScreenToClient(Screen.MousePos))) then
+        Continue;
       //Ищем нашему объекту близкий объект
       for j := 0 to FPoint.Count - 1 do
       begin
@@ -198,6 +248,7 @@ begin
             begin
               //Задаём цвет
               Stroke.Color := FPoint[j].Color;
+              Stroke.Thickness := FPoint[j].Size;
               //Рисуем с учетом расстояния между точками, "((100 / All) * Abs(All - D)) / 100" - это прозрачность линии
               DrawLine(FPoint[i].Point, FPoint[j].Point, ((100 / All) * Abs(All - D)) / 100);
             end;
@@ -208,6 +259,7 @@ begin
             begin
               //Задаём цвет
               Stroke.Color := FPoint[j].Color;
+              Stroke.Thickness := FPoint[j].Size;
               //Рисуем с учетом расстояния между точками
               DrawLine(FPoint[i].Point, FPoint[j].Point, ((100 / Me) * Abs(Me - D)) / 100);
             end;
@@ -222,30 +274,10 @@ begin
       //Рисуем
       FillEllipse(RectPoint, 0.6);
     end;
-
+  finally
     EndScene;
   end;
-end;
-
-procedure TFormMain.FormResize(Sender: TObject);
-begin
-  //Сохраним размеры окна для использовании в потоке
-  FScreenBounds := ClientRect;
-  //Удаляем те, что вне видимости
-  while FPoint.Count > (ClientWidth * ClientHeight) div 3500 do
-  begin
-    FPoint.Delete(RandomRange(1, FPoint.Count - 1));
-  end;
-  //Добавляем, если не хватает
-  while FPoint.Count < (ClientWidth * ClientHeight) div 3500 do
-  begin
-    FPoint.Add(CreateRandomItem);
-  end;
-end;
-
-procedure TFormMain.FormShow(Sender: TObject);
-begin
-  Refill;
+  Inc(FPS);
 end;
 
 end.
